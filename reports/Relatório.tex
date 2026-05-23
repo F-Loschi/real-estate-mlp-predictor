@@ -1,0 +1,146 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=25mm}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codeblue}{rgb}{0.1,0.2,0.6}
+\definecolor{backcolour}{rgb}{0.96,0.96,0.96}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codeblue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{purple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\title{\textbf{Relatório Técnico: Previsão de Preços de Imóveis com Fusão de Dados e Redes MLP}}
+\author{\textbf{Felipe Silva Loschi} \\ Engenharia de Software (GES - 601)}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este relatório mostra o desenvolvimento de um modelo de Machine Learning para prever preços de casas usando características físicas do imóvel e dados demográficos da região. Juntando as duas bases de dados através do código postal, criei uma arquitetura de rede neural Multi-Layer Perceptron (MLP) com TensorFlow e Keras. O pipeline foi feito com cuidado para evitar vazamento de dados (\textit{Data Leakage}) e trata problemas não-lineares aplicando transformação logarítmica e uma seleção de variáveis baseada no coeficiente de Spearman e em regras de negócio.
+\end{abstract}
+
+\section{Introdução e Fusão de Dados}
+O objetivo do projeto é criar um modelo capaz de prever o preço de venda de imóveis residenciais. Para deixar o modelo mais inteligente, juntei a base com os dados físicos das casas (\texttt{kc\_house\_data.csv}) com o dataset de informações demográficas da região (\texttt{zipcode\_demographics.csv}), usando a coluna \texttt{zipcode} como chave para o \textit{merge}.
+
+Colunas que serviam apenas como identificadores ou dados temporais que não ajudariam na predição (\texttt{id} e \texttt{date}) foram retiradas do dataset. Além disso, criei uma nova variável binária chamada \texttt{was\_renovated} a partir do ano de reforma (\texttt{yr\_renovated}) para indicar simplesmente se a casa foi reformada ou não, simplificando essa informação para a rede neural.
+
+\section{Análise Exploratória de Dados (EDA) e Seleção de Atributos}
+Na análise exploratória, estudei como as variáveis preditoras se distribuem e como elas se relacionam com o preço (\texttt{price}). Como muitos dados não seguem uma distribuição linear perfeita e possuem assimetria, usei o coeficiente de correlação de \textbf{Spearman} para guiar a escolha das melhores variáveis.
+
+\subsection{Identificação de Outliers e Filtragem}
+Durante a EDA, encontrei um erro claro na coluna de quantidade de quartos (\texttt{bedrooms}): um dos imóveis estava registrado com mais de 30 quartos, o que não fazia sentido para o tamanho da casa. Fiz um filtro para remover esse outlier e manter apenas os registros reais ($<30$ quartos), evitando que esse dado inconsistente atrapalhasse o treino do modelo.
+
+\subsection{Critério de Seleção de Atributos}
+Para não sobrecarregar a rede MLP com variáveis irrelevantes ou redundantes, defini um critério de corte: selecionei apenas as variáveis que tinham uma correlação em módulo igual ou maior que $0,3$ ($|\rho| \ge 0.3$) com a variável alvo \texttt{price}. Esse valor é um bom limite prático para garantir que estamos usando apenas variáveis que realmente trazem alguma informação útil para o modelo.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{heatmap_spearman.png}
+    \caption{Matriz de Correlação de Spearman filtrada para a variável dependente Price.}
+    \label{fig:heatmap}
+\end{figure}
+
+Apesar de seguir esse corte matemático, abri duas exceções importantes pensando na lógica do negócio:
+\begin{itemize}
+    \item \textbf{\texttt{view}:} A variável que mede a qualidade da vista da casa teve correlação de $0,29$. Como ficou muito perto do corte de $0,3$ e a vista é um fator que pesa muito na decisão de quem vai comprar um imóvel, decidi manter essa coluna no modelo.
+    \item \textbf{\texttt{long}:} Mantive a longitude para fazer par com a latitude (\texttt{lat}). Se eu tirasse a longitude, o modelo perderia a noção de geolocalização exata, ficando impossibilitado de entender quais bairros ou regiões específicas são mais valorizados.
+\end{itemize}
+
+Também retirei as colunas com a contagem absoluta de escolaridade (\texttt{edctn\_*\_qty}) deixando apenas as respectivas variáveis percentuais, que estão em uma escala comum a todos. No final, o modelo ficou com 17 variáveis preditoras.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{grid_features_selecionadas.png}
+    \caption{Grid de dispersão das 17 features selecionadas após o corte de correlação e ajustes de domínio.}
+    \label{fig:grid_features}
+\end{figure}
+
+\subsection{Transformação Logarítmica}
+Notei que o preço (\texttt{price}) e outras variáveis financeiras/demográficas, como renda (\texttt{medn\_incm\_per\_prsn\_amt}) e valor médio de moradia regional (\texttt{hous\_val\_amt}), tinham distribuições muito esticadas para a direita (presença de valores muito altos). Para resolver isso e ajudar o algoritmo a convergir melhor, apliquei a transformação logarítmica natural:
+\begin{equation}
+    \tilde{x} = \ln(x)
+\end{equation}
+
+Essa transformação ajuda a deixar os dados em uma escala mais equilibrada, facilitando o ajuste dos pesos da rede neural durante o treino.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{boxplot_features.png}
+    \caption{Análise de Dispersão e Limites de Outliers via Boxplots das Features Selecionadas.}
+    \label{fig:boxplots}
+\end{figure}
+
+\section{Engenharia de Recursos e Pipeline de Preparação}
+\subsection{Prevenção de Data Leakage}
+Para garantir que o modelo funcione bem com dados novos e do mundo real (\texttt{future\_unseen\_examples.csv}), dividi a base em 80\% para treino e 20\% para teste. Na hora de padronizar os dados com o \texttt{StandardScaler}, fiz o processo do jeito correto para evitar o vazamento de dados (\textit{Data Leakage}): o ajuste (\textit{fit}) foi feito apenas no conjunto de treino, usando apenas o \textit{transform} nos dados de teste e validação:
+\begin{lstlisting}[language=Python]
+# Isolamento estrito do Scaler para evitar Data Leakage
+standard = StandardScaler()
+X_train = standard.fit_transform(X_train)
+X_test = standard.transform(X_test)
+\end{lstlisting}
+
+\section{Arquitetura da Rede Neural MLP}
+O modelo escolhido foi uma rede neural Multi-Layer Perceptron (MLP) criada com Keras e TensorFlow. Montei uma estrutura com camadas densas que vão diminuindo de tamanho para extrair os padrões dos dados de forma eficiente.
+
+\begin{table}[H]
+\centering
+\caption{Especificação Arquitetural da Rede MLP Dedicada}
+\label{tab:mlp}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Camada} & \textbf{Neurônios / Unidades} & \textbf{Função de Ativação} \\ \midrule
+Input (Entrada) & 17 & --- \\
+Dense 1         & 256 & ReLU \\
+Dense 2         & 128 & ReLU \\
+Dense 3         & 64 & ReLU \\
+Dense 4         & 32 & ReLU \\
+Saída (Output)  & 1 & Linear (Regressão) \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Usei a função de perda de Erro Quadrático Médio (\textit{MSE}) e o otimizador \textbf{Adam} com a taxa de aprendizado padrão ($\alpha = 10^{-3}$). Nas camadas escondidas usei a função de ativação ReLU para evitar problemas com o sumiço do gradiente, e na última camada usei ativação linear, que é o padrão para problemas de regressão.
+
+\section{Análise de Resultados e Generalização}
+Para evitar o problema de \textit{overfitting} e garantir a generalização do modelo, usei o \textit{train\_test\_split}, dividindo o conjunto em 80\% para treino e 20\% para teste. Além disso, usei o \textit{Early Stopping} para monitorar o erro de um conjunto de validação (20\% separado do treino), configurado com uma paciência de 15 épocas.
+
+\begin{figure}[H]
+      \centering
+      \includegraphics[width=0.7\textwidth]{curva_convergencia.png}
+      \caption{Histórico de Treinamento: Convergência das funções de perda no Treino e Validação.}
+      \label{fig:loss}
+\end{figure}
+
+O comportamento das curvas de erro de treino e validação caindo juntas mostra que o modelo aprendeu os padrões de forma estável. No fim das contas, isso significa que o modelo está pronto para generalizar bem e pronto para ser testado na prática para estimar preços de imóveis de forma confiável.
+
+\end{document}
