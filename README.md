@@ -11,7 +11,7 @@ O projeto está estruturado da seguinte forma:
 ├── data/              # Datasets originais (.csv)
 ├── plots/             # Gráficos gerados durante a análise (Heatmap, Boxplots, Loss)
 ├── src/               # Código-fonte (Notebook Jupyter com o pipeline)
-│   └── atividadeExtra.ipynb
+│   └── real_estate_mlp.ipynb
 ├── reports/           # Relatório técnico detalhado formatado em LaTeX e PDF
 └── README.md          # Documentação principal do projeto
 
